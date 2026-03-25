@@ -1,0 +1,90 @@
+def formatTimeDate(timedate):
+    """From DD-MM(TEXT)-YY to DDMMYY
+    MM is first three letters of month name, so use dictionary to map string to number and convert to DDMMYY"""
+
+def getAllTCUs(DB_PATH):
+    """Use SQLite 3 functions to query this:
+        TCU table Joined with VideoSegment table using VideoSegnemet's PK, TCU's FK VIDEOSEGID
+        Don't include  TCUs with video_saved, audio_saved, and frame_saved all set to 1, because those are already saved and we don't need to save them again.
+
+        returns rows of data with the following columns:
+        video_urlID(from VideoSegment), meeting_date(from VideoSegment), "State"(from VideoSegment), County(from VideoSegment), TCU_ID (from TCU), TCU_start_time (from TCU), TCU_end_time (from TCU)
+        """
+    pass
+
+def downloadVideoSegment(row, DB_PATH):
+    """Use the yt-dlp API and --download-sections to download the video segment specified by 
+    videoID, start_time, and end_time. We download the video segment with a 0.5 second buffer on either side.
+    Save the video segment to the output/video/{State} directory
+    with File name {STATE}-{COUNTY}-{DDMMYYYY}-{VideoID}-{TCUid}.mp4
+    after success, update db rows video_saved to 1 for the corresponding TCU_ID in the TCU table"""
+    video_ID, meeting_date, State, County, TCU_ID, TCU_start_time, TCU_end_data = row
+    videourl = f"youtube/{video_ID}"
+    file_name = f"{State}-{County}-{meeting_date}-{video_ID}-{TCUTCU_IDid}"
+    return video_path
+    pass
+
+def extractAudio(video_path, DB_PATH):
+    """Use ffmpeg to extract the audio from the video file specified by video_path and save it to audio_path.
+    we'll use the video path to derive the audio path by replacing "video" with "audio" in the path and changing the file extension to .wav
+    Save the extracted audio to the output/audio/{State} directory
+    with File name {STATE}-{COUNTY}-{DDMMYYYY}-{VideoID}-{TCUid}.wav
+    after success, update db rows audio_saved to 1 for the corresponding TCU_ID in the TCU table"""
+    
+    return audiopath
+    pass
+
+def extractFrames(video_path, DB_PATH):
+    """Use ffmpeg to extract frames from the video file specified by video_path and save them to frames_dir.
+    we'll use the video path to derive the frames path by replacing "video" with "audio" in the path and use the file name without extension as the frames directory name
+    Save the Frames to the output/frames/{State}/{STATE}-{COUNTY}-{DDMMYYYY}-{VideoID}-{TCUid} directory
+    with File names frame_{frame_number}.jpg
+    use os.exists to find the last frame number extracted and increment frame_number, start from there to avoid re-extracting frames if the process is interrupted
+    after success, update db rows frame_saved to 1 for the corresponding TCU_ID in the TCU table"""
+
+
+    return frameFolderPath
+    pass
+
+def exportExtractionMetadata(TCU_ID, DB_PATH, output_dir):
+    """Export the metadata for the TCU specified by TCU_ID to a csv with following columns:
+        tcu_id Matches the tcu_id in the annotation spreadsheet
+
+        video_url Original YouTube URL
+
+        meeting_date Meeting date
+
+        tcu_start Start timestamp (seconds)
+
+        tcu_end End timestamp (seconds)
+
+        clip_duration_s Derived: tcu_end minus tcu_start
+
+        video_clip_path Relative path to .mp4 file
+
+        audio_clip_path Relative path to .wav file
+
+        frames_folder_path Relative path to frames subfolder
+
+        extraction_date Date the clip was extracted 
+        read master csv and check if TCU_ID is in CSV. Save the updated csv to output/metadata/metadata.csv"""
+    pass
+
+
+def main():
+    DB_PATH = "db/annotation.db"
+    rows = getAllTCUs(DB_PATH)
+    for row in rows:
+        
+        video_path = downloadVideoSegment(row, DB_PATH)
+        audio_path = extractAudio(video_path, DB_PATH)
+        frames_dir = extractFrames(video_path, DB_PATH)
+        exportExtractionMetadata(TCU_ID, DB_PATH, output_dir)
+
+
+"""
+Todos:query out save states so we individually download/extract
+COmplete details
+
+
+"""
