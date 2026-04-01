@@ -4,6 +4,8 @@ import subprocess
 import csv
 from datetime import date
 from pathlib import Path
+from tqdm import tqdm
+import threading
 
 MONTH_MAP = {
     "jan": "01", "feb": "02", "mar": "03", "apr": "04",
@@ -13,8 +15,7 @@ MONTH_MAP = {
 
 
 def formatTimeDate(timedate):
-    """From DD-MM(TEXT)-YY to DDMMYY
-    MM is first three letters of month name, so use dictionary to map string to number and convert to DDMMYY"""
+    """From DD-MM(TEXT)-YY to DDMMYY"""
     parts = timedate.strip().split("-")
     day = parts[0].zfill(2)
     month_text = parts[1][:3].lower()
@@ -22,16 +23,12 @@ def formatTimeDate(timedate):
     year = parts[2] if len(parts[2]) == 4 else "20" + parts[2]
     return f"{day}{month}{year}"
 
+def formatTime(t):
+    """From HH:MM:SS to seconds as float"""
+    h, m, s = t.split(":")
+    return round(int(h) * 3600 + int(m) * 60 + float(s), 3)
 
 def getAllTCUs(DB_PATH):
-    """Use SQLite 3 functions to query this:
-        TCU table Joined with VideoSegment table using VideoSegment's PK, TCU's FK VIDEOSEGID
-        Don't include TCUs with video_saved, audio_saved, and frame_saved all set to 1, because those are already saved and we don't need to save them again.
-
-        returns rows of data with the following columns:
-        video_urlID(from VideoSegment), meeting_date(from VideoSegment), "State"(from VideoSegment), County(from VideoSegment), video_saved (from TCU), \
-            audio_saved (from TCU), frames_saved (from TCU), TCU_ID (from TCU), TCU_start_time (from TCU), TCU_end_time (from TCU)
-        """
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
@@ -54,13 +51,43 @@ def getAllTCUs(DB_PATH):
     conn.close()
     return rows
 
+def run_ffmpeg_with_progress(cmd, desc, duration_secs=None):
+    """Run an ffmpeg command with a tqdm progress bar, streaming progress via pipe."""
+    process = subprocess.Popen(
+        cmd + ["-progress", "pipe:1", "-nostats"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,  # capture instead of devnull
+        text=True,
+    )
 
+    stderr_lines = []
+    def consume_stderr():
+        for line in process.stderr:
+            stderr_lines.append(line)
+    stderr_thread = threading.Thread(target=consume_stderr, daemon=True)
+    stderr_thread.start()
+
+    with tqdm(total=duration_secs, desc=desc, unit="s", leave=False, dynamic_ncols=True) as pbar:
+        last = 0
+        for line in process.stdout:
+            if line.startswith("out_time_ms="):
+                try:
+                    ms = int(line.strip().split("=")[1])
+                    secs = round(ms / 1_000_000, 2)
+                    if secs > last:
+                        pbar.update(round(secs - last, 2))
+                        last = secs
+                except ValueError:
+                    pass
+
+    process.wait()
+    stderr_thread.join()
+
+    if process.returncode != 0:
+        print(f"[ffmpeg stderr]:\n{''.join(stderr_lines)}")
+        raise subprocess.CalledProcessError(process.returncode, cmd[0])
+    
 def downloadVideoSegment(row, DB_PATH):
-    """Use the yt-dlp API and --download-sections to download the video segment specified by
-    videoID, start_time, and end_time. We download the video segment with a 0.5 second buffer on either side.
-    Save the video segment to the output/video/{State} directory
-    with File name {STATE}-{COUNTY}-{DDMMYYYY}-{VideoID}-{TCUid}.mp4
-    after success, update db rows video_saved to 1 for the corresponding TCU_ID in the TCU table"""
     video_ID, meeting_date, State, County, TCU_ID, TCU_start_time, TCU_end_time = row
     video_url = f"https://www.youtube.com/watch?v={video_ID}"
 
@@ -70,29 +97,58 @@ def downloadVideoSegment(row, DB_PATH):
     output_dir = Path(f"output/video/{State}")
     output_dir.mkdir(parents=True, exist_ok=True)
     video_path = str(output_dir / f"{file_name}.mp4")
+    full_path = str(output_dir / f"{video_ID}_full.mp4")
 
-    start_buffered = max(0, float(TCU_start_time) - 0.5)
-    end_buffered = float(TCU_end_time) + 0.5
-    section = f"*{start_buffered}-{end_buffered}"
+    start_sec = formatTime(TCU_start_time)
+    end_sec = formatTime(TCU_end_time)
 
-    try:
-        result = subprocess.run(
+    # Step 1: Download full video if not already cached
+    if not Path(full_path).exists():
+        process = subprocess.Popen(
             [
                 "yt-dlp",
-                "--download-sections", section,
-                "--force-keyframes-at-cuts",
-                "-o", video_path,
+                "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]",
+                "--remote-components", "ejs:github",
+                "--newline",
+                "--no-quiet",
+                "--progress",
+                "-o", full_path,
                 video_url,
             ],
-            check=True,
-            capture_output=True,
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.DEVNULL,
             text=True,
         )
-        print(f"[downloadVideoSegment] Downloaded: {video_path}")
-    except subprocess.CalledProcessError as e:
-        print(f"[downloadVideoSegment] yt-dlp failed for TCU {TCU_ID}: {e.stderr}")
-        raise
 
+        for line in process.stderr:
+            line = line.strip()
+            if line:
+                print(f"\r{line:<120}", end="", flush=True)
+
+        process.wait()
+        print()  # newline after download finishes
+        if process.returncode != 0:
+            raise subprocess.CalledProcessError(process.returncode, "yt-dlp")
+
+        print(f"[downloadVideoSegment] Full video cached: {full_path}")
+
+    # Step 2: Cut the TCU segment with ffmpeg
+    run_ffmpeg_with_progress(
+        [
+            "ffmpeg", "-y",
+            "-ss", str(start_sec),
+            "-to", str(end_sec),
+            "-i", full_path,
+            "-c", "copy",
+            video_path,
+        ],
+        desc=f"Cut TCU {TCU_ID}",
+        duration_secs=round(end_sec - start_sec, 3),
+    )
+
+    print(f"[downloadVideoSegment] Cut segment saved: {video_path}")
+
+    # Step 3: Update DB
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -104,38 +160,29 @@ def downloadVideoSegment(row, DB_PATH):
         raise
 
     return video_path
-
-
 def extractAudio(video_path, DB_PATH, tcu_id):
-    """Use ffmpeg to extract the audio from the video file specified by video_path and save it to audio_path.
-    we'll use the video path to derive the audio path by replacing "video" with "audio" in the path and changing the file extension to .wav
-    Save the extracted audio to the output/audio/{State} directory
-    with File name {STATE}-{COUNTY}-{DDMMYYYY}-{VideoID}-{TCUid}.wav
-    after success, update db rows audio_saved to 1 for the corresponding TCU_ID in the TCU table"""
-    audio_path = video_path.replace("output/video", "output/audio").replace(".mp4", ".wav")
+    video_path = Path(video_path)
+    file_name = video_path.name  
+    audio_file_name = file_name.replace(".mp4", ".wav")
+
+    audio_path = Path("output/audio") / video_path.parts[-2] / audio_file_name
     audio_dir = Path(audio_path).parent
     audio_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        result = subprocess.run(
-            [
-                "ffmpeg", "-y",
-                "-i", video_path,
-                "-vn",
-                "-acodec", "pcm_s16le",
-                "-ar", "44100",
-                "-ac", "2",
-                audio_path,
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        print(f"[extractAudio] Extracted audio: {audio_path}")
-    except subprocess.CalledProcessError as e:
-        print(f"[extractAudio] ffmpeg failed for {video_path}: {e.stderr}")
-        raise
+    run_ffmpeg_with_progress(
+        [
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-vn",
+            "-acodec", "pcm_s16le",
+            "-ar", "44100",
+            "-ac", "2",
+            audio_path,
+        ],
+        desc=f"Audio  TCU {tcu_id}",
+    )
 
+    print(f"[extractAudio] Extracted audio: {audio_path}")
 
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -149,44 +196,26 @@ def extractAudio(video_path, DB_PATH, tcu_id):
 
     return audio_path
 
-
 def extractFrames(video_path, DB_PATH, tcu_id):
-    """Use ffmpeg to extract frames from the video file specified by video_path and save them to frames_dir.
-    we'll use the video path to derive the frames path by replacing "video" with "frames" in the path and use the file name without extension as the frames directory name
-    Save the Frames to the output/frames/{State}/{STATE}-{COUNTY}-{DDMMYYYY}-{VideoID}-{TCUid} directory
-    with File names frame_{frame_number}.jpg
-    use os.exists to find the last frame number extracted and increment frame_number, start from there to avoid re-extracting frames if the process is interrupted
-    after success, update db rows frame_saved to 1 for the corresponding TCU_ID in the TCU table"""
-    stem = Path(video_path).stem
-    frames_dir = Path(video_path.replace("output/video", "output/frames")).parent / stem
+    video_path = Path(video_path)
+    folder_name = video_path.stem  
+
+    frames_path = Path("output/frames") / video_path.parts[-2] / folder_name / ""
+    frames_dir = Path(frames_path).parent
     frames_dir.mkdir(parents=True, exist_ok=True)
 
-    # Find last extracted frame to resume if interrupted
-    existing_frames = sorted(frames_dir.glob("frame_*.jpg"))
-    start_frame = len(existing_frames) + 1 if existing_frames else 1
+    run_ffmpeg_with_progress(
+        [
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-vf", "format=yuvj420p",
+            "-vsync", "vfr",
+            str(frames_dir / "frame_%d.jpg"),
+        ],
+        desc=f"Frames TCU {tcu_id}",
+    )
 
-    if start_frame > 1:
-        print(f"[extractFrames] Resuming from frame {start_frame} in {frames_dir}")
-
-    try:
-        result = subprocess.run(
-            [
-                "ffmpeg",
-                "-i", video_path,
-                "-start_number", str(start_frame),
-                "-vf", f"select='gte(n\\,{start_frame - 1})'",
-                "-vsync", "vfr",
-                str(frames_dir / "frame_%d.jpg"),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        print(f"[extractFrames] Extracted frames to: {frames_dir}")
-    except subprocess.CalledProcessError as e:
-        print(f"[extractFrames] ffmpeg failed for {video_path}: {e.stderr}")
-        raise
-
+    print(f"[extractFrames] Extracted frames to: {frames_dir}")
 
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -201,7 +230,6 @@ def extractFrames(video_path, DB_PATH, tcu_id):
     return str(frames_dir)
 
 def exportExtractionMetadata(DB_PATH, output_path):
-    # Query all fully saved TCUs at once
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -230,7 +258,6 @@ def exportExtractionMetadata(DB_PATH, output_path):
         print("[exportExtractionMetadata] No fully saved TCUs found.")
         return
 
-    # Read existing TCUIDs from CSV to avoid duplicates
     output_file = Path(output_path)
     output_file.parent.mkdir(parents=True, exist_ok=True)
     existing_tcuids = set()
@@ -238,7 +265,7 @@ def exportExtractionMetadata(DB_PATH, output_path):
         try:
             with open(output_file, "r", newline="") as f:
                 reader = csv.reader(f)
-                next(reader, None)  # skip header
+                next(reader, None)
                 for r in reader:
                     if r:
                         existing_tcuids.add(r[0])
@@ -246,7 +273,6 @@ def exportExtractionMetadata(DB_PATH, output_path):
             print(f"[exportExtractionMetadata] Failed to read existing CSV: {e}")
             raise
 
-    # Append only new rows
     write_header = not output_file.exists() or output_file.stat().st_size == 0
     new_count = 0
     try:
@@ -254,8 +280,8 @@ def exportExtractionMetadata(DB_PATH, output_path):
             writer = csv.writer(f)
             if write_header:
                 writer.writerow(["tcu_id", "video_url", "meeting_date", "tcu_start", "tcu_end",
-                                  "clip_duration_s", "video_clip_path", "audio_clip_path",
-                                  "frames_folder_path", "extraction_date"])
+                                "clip_duration_s", "video_clip_path", "audio_clip_path",
+                                "frames_folder_path", "extraction_date"])
             for row in rows:
                 tcu_id, video_id, meeting_date, State, County, tcu_start, tcu_end = row
                 if tcu_id in existing_tcuids:
@@ -268,7 +294,7 @@ def exportExtractionMetadata(DB_PATH, output_path):
                     meeting_date,
                     tcu_start,
                     tcu_end,
-                    round(float(tcu_end) - float(tcu_start), 3),
+                    round(formatTime(tcu_end) - formatTime(tcu_start), 3),
                     f"output/video/{State}/{file_stem}.mp4",
                     f"output/audio/{State}/{file_stem}.wav",
                     f"output/frames/{State}/{file_stem}",
@@ -280,10 +306,14 @@ def exportExtractionMetadata(DB_PATH, output_path):
         raise
 
     print(f"[exportExtractionMetadata] Appended {new_count} new TCUs -> {output_file}")
+
+
 def main():
     DB_PATH = "db/annotation.db"
     rows = getAllTCUs(DB_PATH)
-    for row in rows:
+    print(f"[main] Found {len(rows)} TCUs to process.")
+
+    for row in tqdm(rows[:5], desc="Overall TCUs", unit="TCU", dynamic_ncols=True):
         video_ID, meeting_date, State, County, video_saved, audio_saved, frames_saved, TCU_ID, TCU_start_time, TCU_end_time = row
 
         video_path = None
@@ -298,7 +328,6 @@ def main():
                 print(f"[main] Skipping TCU {TCU_ID} — video download failed: {e}")
                 continue
         else:
-            # Reconstruct expected path if already downloaded
             formatted_date = formatTimeDate(meeting_date)
             file_stem = f"{State}-{County}-{formatted_date}-{video_ID}-{TCU_ID}"
             video_path = f"output/video/{State}/{file_stem}.mp4"
@@ -313,18 +342,13 @@ def main():
             try:
                 frames_dir = extractFrames(video_path, DB_PATH, TCU_ID)
             except Exception as e:
-                print(f"[main] Skipping frames for TCU {TCU_ID}: {e}")        
+                print(f"[main] Skipping frames for TCU {TCU_ID}: {e}")
+
     try:
         exportExtractionMetadata(DB_PATH, "output/master_clips.csv")
     except Exception as e:
-            print(f"[main] Failed to export metadata for TCU {TCU_ID}: {e}")
+        print(f"[main] Failed to export metadata: {e}")
 
 
 if __name__ == "__main__":
     main()
-"""
-Todos:query out save states so we individually download/extract
-COmplete details
-
-
-"""
