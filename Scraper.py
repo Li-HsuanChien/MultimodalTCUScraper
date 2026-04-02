@@ -112,7 +112,6 @@ def downloadVideoSegment(row, DB_PATH):
             "no_warnings": True,
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["web"],
                     "js_runtimes": ["node"],
                 }
             },
