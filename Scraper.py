@@ -108,8 +108,15 @@ def downloadVideoSegment(row, DB_PATH):
         ydl_opts = {
             "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]",
             "outtmpl": full_path,
-            "quiet": False,
-            "no_warnings": False,
+            "quiet": True,
+            "no_warnings": True,
+            "js_runtimes": ["node"],
+            "remote_components": ["ejs:github"],
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["web"],
+                }
+            },
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([video_url])
