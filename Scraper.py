@@ -106,7 +106,7 @@ def downloadVideoSegment(row, DB_PATH):
     # Step 1: Download full video if not already cached
     if not Path(full_path).exists():
         ydl_opts = {
-            "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]",
+            # "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]",
             "outtmpl": full_path,
             "quiet": True,
             "no_warnings": True,
