@@ -339,3 +339,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
+#Todo: add efficient clipping 1. Refactor VIdeo Table to source same video 2.Access DB for all same video and get batch of rows 3. use batch of rows to cut all TCUs from same video in one ffmpeg call and so on
