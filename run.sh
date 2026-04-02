@@ -18,6 +18,10 @@ pip install --upgrade pip
 echo "== Checking yt-dlp =="
 python -c "import yt_dlp" 2>/dev/null || pip install yt-dlp
 
+
+echo "== Installing requirements =="
+pip install -r requirements.txt
+
 echo "== Checking ffmpeg =="
 if ! command -v ffmpeg >/dev/null 2>&1; then
     echo "ffmpeg not found, installing..."
