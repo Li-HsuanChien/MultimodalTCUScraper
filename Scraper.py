@@ -110,13 +110,13 @@ def downloadVideoSegment(row, DB_PATH):
             "outtmpl": full_path,
             "quiet": True,
             "no_warnings": True,
-            "remote_components": ["ejs:github"],
             "extractor_args": {
                 "youtube": {
                     "player_client": ["web"],
-                   "js_runtimes": ["node"],         
+                    "js_runtimes": ["node"],
                 }
             },
+            "remote_components": "ejs:github",
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([video_url])
