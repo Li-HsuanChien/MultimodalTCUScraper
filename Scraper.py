@@ -5,6 +5,7 @@ import csv
 from datetime import date
 from pathlib import Path
 from tqdm import tqdm
+import yt_dlp
 import threading
 
 MONTH_MAP = {
@@ -104,35 +105,18 @@ def downloadVideoSegment(row, DB_PATH):
 
     # Step 1: Download full video if not already cached
     if not Path(full_path).exists():
-        process = subprocess.Popen(
-            [
-                "yt-dlp",
-                "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]",
-                "--remote-components", "ejs:github",
-                "--newline",
-                "--no-quiet",
-                "--progress",
-                "-o", full_path,
-                video_url,
-            ],
-            stdout=subprocess.PIPE, 
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-
-        for line in process.stderr:
-            line = line.strip()
-            if line:
-                print(f"\r{line:<120}", end="", flush=True)
-
-        process.wait()
-        print()  # newline after download finishes
-        if process.returncode != 0:
-            raise subprocess.CalledProcessError(process.returncode, "yt-dlp")
+        ydl_opts = {
+            "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]",
+            "outtmpl": full_path,
+            "quiet": False,
+            "no_warnings": False,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([video_url])
 
         print(f"[downloadVideoSegment] Full video cached: {full_path}")
 
-    # Step 2: Cut the TCU segment with ffmpeg
+    # Step 2: Cut the TCU segment with ffmpeg (unchanged)
     run_ffmpeg_with_progress(
         [
             "ffmpeg", "-y",
@@ -148,7 +132,7 @@ def downloadVideoSegment(row, DB_PATH):
 
     print(f"[downloadVideoSegment] Cut segment saved: {video_path}")
 
-    # Step 3: Update DB
+    # Step 3: Update DB (unchanged)
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -160,6 +144,7 @@ def downloadVideoSegment(row, DB_PATH):
         raise
 
     return video_path
+
 def extractAudio(video_path, DB_PATH, tcu_id):
     video_path = Path(video_path)
     file_name = video_path.name  
