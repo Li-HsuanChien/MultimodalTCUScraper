@@ -25,10 +25,9 @@ pip install -r requirements.txt
 echo "== Checking ffmpeg =="
 if ! command -v ffmpeg >/dev/null 2>&1; then
     echo "ffmpeg not found, installing..."
-
-    if command -v apt >/dev/null 2>&1; then
-        module load ffmpeg/4.3.2
-    else
+    module load ffmpeg/4.3.2
+    
+    if -v ffmpeg >/dev/null 2>&1; then
         echo "No supported package manager found."
         echo "Please install ffmpeg manually, then re-run."
         exit 1
