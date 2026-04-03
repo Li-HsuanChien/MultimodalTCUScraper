@@ -27,14 +27,7 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
     echo "ffmpeg not found, installing..."
 
     if command -v apt >/dev/null 2>&1; then
-        sudo apt update
-        sudo apt install -y ffmpeg
-    elif command -v yum >/dev/null 2>&1; then
-        sudo yum install -y ffmpeg
-    elif command -v pacman >/dev/null 2>&1; then
-        sudo pacman -S --noconfirm ffmpeg
-    elif command -v brew >/dev/null 2>&1; then
-        brew install ffmpeg
+        module load ffmpeg
     else
         echo "No supported package manager found."
         echo "Please install ffmpeg manually, then re-run."
