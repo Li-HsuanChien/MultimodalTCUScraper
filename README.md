@@ -1,7 +1,3 @@
-Here’s a simple **README.md** based on the steps you want:
-
----
-
 # MultimodalTCUScraper
 
 This repository contains scripts for scraping and processing Multimodal TCU-related data on Penn State ICDS Roar.
@@ -60,5 +56,3 @@ bash run.sh
 ```bash
 chmod +x run.sh
 ```
-
----
