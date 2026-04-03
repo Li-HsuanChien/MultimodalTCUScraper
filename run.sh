@@ -27,7 +27,7 @@ if ! command -v ffmpeg >/dev/null 2>&1; then
     echo "ffmpeg not found, installing..."
 
     if command -v apt >/dev/null 2>&1; then
-        module load ffmpeg
+        module load ffmpeg/4.3.2
     else
         echo "No supported package manager found."
         echo "Please install ffmpeg manually, then re-run."
